@@ -1,7 +1,6 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import qs.Commons
 import "Model.js" as Model
 
 Item {
@@ -18,8 +17,16 @@ Item {
   // waiting for dropboxd to actually settle. _desired is -1 while we just
   // follow the real state, or 0/1 while a pause/resume is still catching up.
   property int _desired: -1
+  // Bumped on every pause/resume. A status result whose process started
+  // before the bump captured pre-control daemon state, so it is thrown away
+  // rather than allowed to overwrite `running` after the switch flipped.
+  property int _generation: 0
   readonly property bool active: _desired === -1 ? running : (_desired === 1)
   property bool refreshing: false
+  // Set by the panel while it is open. Only then does the periodic tick run
+  // the full scan (usage + recent files); a closed panel needs daemon state
+  // for the bar icon and nothing else.
+  property bool detailsWanted: false
   property string statusText: "Checking…"
   property string accountPath: ""
   property string plan: ""
@@ -32,8 +39,12 @@ Item {
   property string lastError: ""
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 60, 10, 3600)
-  readonly property bool busy: statusProcess.running || loginProcess.running || controlProcess.running
-  readonly property string helperPath: (omarchyPath || "") + "/shell/plugins/panels/dropbox/status.py"
+  // Background status polls are not "busy": they must not swallow clicks on
+  // the pause/resume switch (a full poll walks the whole Dropbox folder).
+  readonly property bool busy: loginProcess.running || controlProcess.running
+  readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("status.py").toString().replace(/^file:\/\//, ""))
+  property double inventoryUpdatedAt: 0
+  readonly property int inventoryIntervalMs: 300000
 
   property string _statusOutput: ""
   property string _statusError: ""
@@ -56,13 +67,37 @@ Item {
     return n
   }
 
-  function refresh() {
-    if (statusProcess.running || helperPath === "/shell/plugins/panels/dropbox/status.py") return
-    _statusOutput = ""
-    _statusError = ""
+  function refresh(forceDetails) {
+    quickRefresh()
+    if (detailsWanted) refreshDetails(forceDetails === true)
+  }
+
+  function refreshDetails(force) {
+    if (!authenticated || statusProcess.running) return
+    if (!force && Date.now() - inventoryUpdatedAt < inventoryIntervalMs) return
     refreshing = true
-    statusProcess.command = ["python3", helperPath, "25"]
+    statusProcess.command = ["python3", helperPath, "--inventory", "25"]
     statusProcess.running = true
+  }
+
+  function applyInventory(raw) {
+    var parsed = Model.parseStatus(raw)
+    if (!parsed.ok || parsed.accountPath !== accountPath) return
+    usedBytes = Number(parsed.usedBytes || 0)
+    quotaBytes = Number(parsed.quotaBytes || 0)
+    usagePercent = Number(parsed.usagePercent || 0)
+    quotaKnown = parsed.quotaKnown === true
+    files = parsed.files || []
+    inventoryUpdatedAt = Date.now()
+  }
+
+  // Daemon state only, no folder walk: ~100ms instead of seconds, and it runs
+  // on its own process so it never queues behind a full refresh.
+  function quickRefresh() {
+    if (quickStatusProcess.running) return
+    quickStatusProcess.generation = _generation
+    quickStatusProcess.command = ["python3", helperPath, "--quick"]
+    quickStatusProcess.running = true
   }
 
   function applyStatus(raw) {
@@ -72,18 +107,30 @@ Item {
       return
     }
     installed = parsed.installed === true
-    running = parsed.running === true
     authenticated = parsed.authenticated === true
-    // Reality caught up to the pending pause/resume — stop overriding.
-    if (_desired !== -1 && running === (_desired === 1)) _desired = -1
+    var observed = parsed.running === true
+    if (_desired === -1) {
+      running = observed
+    } else if (observed === (_desired === 1)) {
+      // Reality caught up to the pending pause/resume.
+      running = observed
+      _desired = -1
+      settleTimer.running = false
+    }
+    // Otherwise the poll predates the stop/start landing (dropboxd takes ~5s
+    // to exit after `dropbox-cli stop`, and `status` reports "Up to date"
+    // until then), so keep the optimistic state and wait for the next poll.
     statusText = String(parsed.statusText || (installed ? "Stopped" : "Not installed"))
-    accountPath = String(parsed.accountPath || "")
+    var nextPath = String(parsed.accountPath || "")
+    if (nextPath !== accountPath) {
+      inventoryUpdatedAt = 0
+      usedBytes = 0
+      files = []
+      quotaKnown = false
+    }
+    accountPath = nextPath
     plan = String(parsed.plan || "")
-    usedBytes = Number(parsed.usedBytes || 0)
-    quotaBytes = Number(parsed.quotaBytes || 0)
-    usagePercent = Number(parsed.usagePercent || 0)
-    quotaKnown = parsed.quotaKnown === true
-    files = parsed.files || []
+    if (detailsWanted) refreshDetails(false)
     lastError = ""
   }
 
@@ -98,16 +145,16 @@ Item {
     _loginError = ""
     _loginUrlOpened = false
     actionStatus = "Starting Dropbox login…"
-    loginProcess.command = ["dropbox-cli", "start"]
+    loginProcess.command = ["bash", "-c", "systemctl --user start omarchy-dropbox.service && dropbox-cli start"]
     loginProcess.running = true
   }
 
   function pause() {
-    runControl(["dropbox-cli", "stop"], 0)
+    runControl(["systemctl", "--user", "stop", "omarchy-dropbox.service"], 0)
   }
 
   function resume() {
-    runControl(["dropbox-cli", "start"], 1)
+    runControl(["systemctl", "--user", "start", "omarchy-dropbox.service"], 1)
   }
 
   function toggleRunning() {
@@ -120,6 +167,8 @@ Item {
     // the pause/resume; only surface a message if the command fails.
     if (!installed || controlProcess.running) return
     _desired = desired
+    _generation += 1
+    settleTimer.stop()
     _controlOutput = ""
     _controlError = ""
     controlProcess.command = command
@@ -158,12 +207,14 @@ Item {
   }
 
   Timer {
+    // The bar only needs daemon state. Inventory is loaded on panel use and
+    // cached independently, never on startup or during control settling.
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
     repeat: true
     running: true
     triggeredOnStart: true
-    onTriggered: root.refresh()
+    onTriggered: root.refresh(false)
   }
 
   Timer {
@@ -179,7 +230,7 @@ Item {
     onTriggered: {
       ticks += 1
       if (root.running || ticks >= 15) startupRamp.running = false
-      else root.refresh()
+      else root.quickRefresh()
     }
   }
 
@@ -187,7 +238,7 @@ Item {
     id: delayedRefresh
     interval: 1000
     repeat: false
-    onTriggered: root.refresh()
+    onTriggered: root.quickRefresh()
   }
 
   Timer {
@@ -198,22 +249,38 @@ Item {
   }
 
   Timer {
-    // dropboxd takes a few (variable) seconds to settle after stop/start, so
-    // re-poll a handful of times to reflect the new state without waiting for
-    // the next periodic refresh.
+    // dropboxd takes a few (variable) seconds to settle after stop/start
+    // (~5s to exit, up to ~15s to come back up), so quick-poll until the
+    // daemon state matches what was asked for. applyStatus stops this timer
+    // when it does; give up and fall back to reality after ~20s.
     id: settleTimer
     property int ticks: 0
-    interval: 1500
+    interval: 1000
     repeat: true
     running: false
     onTriggered: {
       settleTimer.ticks += 1
-      root.refresh()
-      if (settleTimer.ticks >= 4) {
+      if (settleTimer.ticks >= 20) {
         settleTimer.ticks = 0
         settleTimer.running = false
         root._desired = -1
+        root.actionStatus = "Dropbox did not reach the requested sync state"
+        root.quickRefresh()
+        return
       }
+      root.quickRefresh()
+    }
+  }
+
+  Process {
+    id: quickStatusProcess
+    property int generation: 0
+    running: false
+    command: []
+    stdout: StdioCollector { id: quickStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (generation !== root._generation) return
+      if (exitCode === 0) root.applyStatus(String(quickStdout.text || ""))
     }
   }
 
@@ -227,7 +294,7 @@ Item {
       root.refreshing = false
       var stdout = String(statusStdout.text || root._statusOutput || "")
       var stderr = String(statusStderr.text || root._statusError || "")
-      if (exitCode === 0) root.applyStatus(stdout)
+      if (exitCode === 0) root.applyInventory(stdout)
       else root.lastError = root.elideStatus(stderr || stdout || "Could not read Dropbox status")
     }
   }
@@ -262,16 +329,20 @@ Item {
       var stdout = String(controlStdout.text || root._controlOutput || "")
       var stderr = String(controlStderr.text || root._controlError || "")
       if (exitCode !== 0) {
+        // Nothing to settle: the daemon state did not change. A plain delayed
+        // refresh re-syncs with reality without a 20s quick-poll loop, and
+        // without an immediate poll wiping the error before anyone reads it.
         root._desired = -1
         root.lastError = root.elideStatus(stderr || stdout || "Dropbox command failed")
         root.actionStatus = root.lastError
-      } else {
-        root.lastError = ""
-        root.actionStatus = ""
+        delayedRefresh.restart()
+        return
       }
+      root.lastError = ""
+      root.actionStatus = ""
       settleTimer.ticks = 0
       settleTimer.restart()
-      delayedRefresh.restart()
+      root.quickRefresh()
     }
   }
 }

@@ -44,47 +44,65 @@ def command_output(command):
 
 
 def scan_dropbox(path, limit):
+  # One scandir per directory and one lstat per file. The type checks come
+  # from the directory entry itself, so a large folder costs a fraction of
+  # what os.walk plus per-file islink/stat/relpath did (~1s vs ~5s for
+  # 470k files).
+  root = str(path).rstrip("/") or "/"
+  prefix_len = len(root) + 1
   total = 0
   counter = 0
   recent = []
-  try:
-    for root, dirs, files in os.walk(path):
-      dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(root, name))]
-      for name in files:
-        file_path = os.path.join(root, name)
-        if os.path.islink(file_path):
-          continue
+  stack = [root]
+  while stack:
+    folder_path = stack.pop()
+    try:
+      entries = os.scandir(folder_path)
+    except OSError:
+      continue
+    folder = folder_path[prefix_len:] or "/"
+    with entries:
+      for entry in entries:
         try:
-          stat = os.stat(file_path)
+          if entry.is_symlink():
+            continue
+          if entry.is_dir(follow_symlinks=False):
+            stack.append(entry.path)
+            continue
+          stat = entry.stat(follow_symlinks=False)
         except OSError:
           continue
         total += stat.st_size
-        rel = os.path.relpath(file_path, path)
-        folder = os.path.dirname(rel)
+        counter += 1
+        key = (int(stat.st_mtime), counter)
+        if len(recent) >= limit and key <= recent[0][:2]:
+          continue
         row = {
-          "name": name,
-          "path": file_path,
-          "folder": "/" if folder in ("", ".") else folder,
-          "modifiedTs": int(stat.st_mtime),
+          "name": entry.name,
+          "path": entry.path,
+          "folder": folder,
+          "modifiedTs": key[0],
           "sizeBytes": stat.st_size,
         }
-        counter += 1
-        entry = (row["modifiedTs"], counter, row)
+        entry_key = (*key, row)
         if len(recent) < limit:
-          heapq.heappush(recent, entry)
+          heapq.heappush(recent, entry_key)
         else:
-          heapq.heappushpop(recent, entry)
-  except OSError:
-    return 0, []
-  rows = [entry[2] for entry in sorted(recent, reverse=True)]
+          heapq.heapreplace(recent, entry_key)
+  rows = [entry_key[2] for entry_key in sorted(recent, reverse=True)]
   return total, rows
 
 
 def main():
   limit = 25
-  if len(sys.argv) > 1:
+  # "quick" skips the Dropbox folder walk (seconds on large folders) and only
+  # reports daemon state, for the fast re-polls after a pause/resume.
+  quick = "--quick" in sys.argv[1:]
+  inventory = "--inventory" in sys.argv[1:]
+  args = [a for a in sys.argv[1:] if a not in ("--quick", "--inventory")]
+  if args:
     try:
-      limit = max(1, min(100, int(sys.argv[1])))
+      limit = max(1, min(100, int(args[0])))
     except ValueError:
       limit = 25
 
@@ -98,18 +116,19 @@ def main():
 
   running = False
   status_text = "Not installed"
-  if dropbox_cli:
+  if dropbox_cli and not inventory:
     status_exit, status_output = command_output([dropbox_cli, "status"])
     status_text = status_output if status_exit == 0 and status_output else "Stopped"
     lowered = status_text.lower()
     stopped = "not running" in lowered or "isn't running" in lowered or lowered == "stopped"
     running = status_exit == 0 and status_output != "" and not stopped
 
-  used, files = scan_dropbox(account_path, limit) if authenticated else (0, [])
+  used, files = scan_dropbox(account_path, limit) if authenticated and not quick else (0, [])
   usage_percent = (used / quota * 100) if quota > 0 else 0
 
   print(json.dumps({
     "ok": True,
+    "quick": quick,
     "installed": dropbox_cli is not None,
     "running": running,
     "authenticated": authenticated,

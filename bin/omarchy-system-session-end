@@ -1,0 +1,5 @@
+#!/bin/bash
+# omarchy:summary=Coordinate application closure before ending the session
+# omarchy:hidden=true
+# omarchy:args=<shutdown|reboot|logout> [--cancel]
+exec python3 "$OMARCHY_PATH/default/session-end.py" "$@"

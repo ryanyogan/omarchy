@@ -3,7 +3,11 @@
 # omarchy:summary=Remove Dropbox and its bar plugin.
 # omarchy:requires-sudo=true
 
-dropbox-cli stop 2>/dev/null || true
+systemctl --user stop omarchy-dropbox.service 2>/dev/null || true
+omarchy-dropbox-stop 2>/dev/null || true
+rm -f "$HOME/.config/systemd/user/omarchy-dropbox.service"
+rm -f "$HOME/.config/autostart/dropbox.desktop"
+systemctl --user daemon-reload
 omarchy-plugin-disable omarchy.dropbox
 omarchy-pkg-drop dropbox dropbox-cli libappindicator-gtk3 python-gpgme nautilus-dropbox
 

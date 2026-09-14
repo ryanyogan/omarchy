@@ -147,6 +147,7 @@ Panel {
     id: dropbox
     settings: root.settings
     omarchyPath: root.omarchyPath
+    detailsWanted: root.opened
   }
 
   Connections {
@@ -182,7 +183,7 @@ Panel {
       }
     }
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton) dropbox.refresh()
+      if (buttonCode === Qt.RightButton) dropbox.refresh(true)
       else if (buttonCode === Qt.MiddleButton) dropbox.login()
       else root.toggle()
     }
@@ -209,7 +210,7 @@ Panel {
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
-        if (t === "r" || t === "R") dropbox.refresh()
+        if (t === "r" || t === "R") dropbox.refresh(true)
         else if (t === "l" || t === "L") dropbox.login()
         else if (t === "p" || t === "P") root.toggleRunning()
       }
@@ -281,7 +282,6 @@ Panel {
           }
 
           Text {
-            textFormat: Text.PlainText
             visible: dropbox.actionStatus !== "" || dropbox.lastError !== ""
             width: parent.width
             text: dropbox.actionStatus !== "" ? dropbox.actionStatus : dropbox.lastError
@@ -422,7 +422,6 @@ Panel {
         spacing: Style.space(1)
 
         Text {
-          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: dropbox.installed ? "Login to Dropbox" : "Dropbox CLI is not installed"
           color: root.foreground
@@ -432,7 +431,6 @@ Panel {
         }
 
         Text {
-          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: dropbox.installed ? "Start the authentication flow" : "Install Dropbox from the service menu"
           color: root.dim
@@ -481,7 +479,6 @@ Panel {
       spacing: Style.space(8)
 
       Text {
-        textFormat: Text.PlainText
         text: Model.fileGlyph(fileRow.fileName)
         color: root.foreground
         font.family: root.fontFamily
@@ -495,7 +492,6 @@ Panel {
         spacing: Style.space(1)
 
         Text {
-          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: fileRow.fileName
           color: root.foreground
@@ -505,7 +501,6 @@ Panel {
         }
 
         Text {
-          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: Model.fileMeta(fileRow.file)
           color: root.dim
@@ -530,7 +525,6 @@ Panel {
   }
 
   component InfoLabel: Text {
-    textFormat: Text.PlainText
     color: root.foreground
     opacity: 0.6
     font.family: root.fontFamily
@@ -538,7 +532,6 @@ Panel {
   }
 
   component InfoValue: Text {
-    textFormat: Text.PlainText
     color: root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall

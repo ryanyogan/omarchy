@@ -1,0 +1,4 @@
+#!/bin/bash
+# omarchy:summary=Wait for Dropbox to finish a graceful stop
+# omarchy:hidden=true
+exec python3 "$OMARCHY_PATH/default/dropbox-stop.py"

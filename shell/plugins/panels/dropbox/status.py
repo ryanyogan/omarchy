@@ -73,19 +73,22 @@ def scan_dropbox(path, limit):
         except OSError:
           continue
         total += stat.st_size
+        counter += 1
+        key = (int(stat.st_mtime), counter)
+        if len(recent) >= limit and key <= recent[0][:2]:
+          continue
         row = {
           "name": entry.name,
           "path": entry.path,
           "folder": folder,
-          "modifiedTs": int(stat.st_mtime),
+          "modifiedTs": key[0],
           "sizeBytes": stat.st_size,
         }
-        counter += 1
-        entry_key = (row["modifiedTs"], counter, row)
+        entry_key = (*key, row)
         if len(recent) < limit:
           heapq.heappush(recent, entry_key)
         else:
-          heapq.heappushpop(recent, entry_key)
+          heapq.heapreplace(recent, entry_key)
   rows = [entry_key[2] for entry_key in sorted(recent, reverse=True)]
   return total, rows
 
@@ -95,7 +98,8 @@ def main():
   # "quick" skips the Dropbox folder walk (seconds on large folders) and only
   # reports daemon state, for the fast re-polls after a pause/resume.
   quick = "--quick" in sys.argv[1:]
-  args = [a for a in sys.argv[1:] if a != "--quick"]
+  inventory = "--inventory" in sys.argv[1:]
+  args = [a for a in sys.argv[1:] if a not in ("--quick", "--inventory")]
   if args:
     try:
       limit = max(1, min(100, int(args[0])))
@@ -112,7 +116,7 @@ def main():
 
   running = False
   status_text = "Not installed"
-  if dropbox_cli:
+  if dropbox_cli and not inventory:
     status_exit, status_output = command_output([dropbox_cli, "status"])
     status_text = status_output if status_exit == 0 and status_output else "Stopped"
     lowered = status_text.lower()

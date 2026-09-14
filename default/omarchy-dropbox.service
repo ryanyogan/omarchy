@@ -1,0 +1,18 @@
+[Unit]
+Description=Dropbox sync daemon
+Documentation=https://help.dropbox.com/installs/linux-commands
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionFileIsExecutable=/usr/bin/dropbox-cli
+
+[Service]
+Type=exec
+ExitType=cgroup
+ExecStart=/usr/bin/dropbox-cli start
+ExecStop=/usr/bin/python3 /usr/share/omarchy/default/dropbox-stop.py
+TimeoutStopSec=20s
+KillMode=control-group
+Restart=no
+
+[Install]
+WantedBy=graphical-session.target

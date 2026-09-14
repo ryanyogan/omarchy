@@ -1,7 +1,6 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import qs.Commons
 import "Model.js" as Model
 
 Item {
@@ -43,7 +42,9 @@ Item {
   // Background status polls are not "busy": they must not swallow clicks on
   // the pause/resume switch (a full poll walks the whole Dropbox folder).
   readonly property bool busy: loginProcess.running || controlProcess.running
-  readonly property string helperPath: (omarchyPath || "") + "/shell/plugins/panels/dropbox/status.py"
+  readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("status.py").toString().replace(/^file:\/\//, ""))
+  property double inventoryUpdatedAt: 0
+  readonly property int inventoryIntervalMs: 300000
 
   property string _statusOutput: ""
   property string _statusError: ""
@@ -66,20 +67,34 @@ Item {
     return n
   }
 
-  function refresh() {
-    if (statusProcess.running || helperPath === "/shell/plugins/panels/dropbox/status.py") return
-    _statusOutput = ""
-    _statusError = ""
+  function refresh(forceDetails) {
+    quickRefresh()
+    if (detailsWanted) refreshDetails(forceDetails === true)
+  }
+
+  function refreshDetails(force) {
+    if (!authenticated || statusProcess.running) return
+    if (!force && Date.now() - inventoryUpdatedAt < inventoryIntervalMs) return
     refreshing = true
-    statusProcess.generation = _generation
-    statusProcess.command = ["python3", helperPath, "25"]
+    statusProcess.command = ["python3", helperPath, "--inventory", "25"]
     statusProcess.running = true
+  }
+
+  function applyInventory(raw) {
+    var parsed = Model.parseStatus(raw)
+    if (!parsed.ok || parsed.accountPath !== accountPath) return
+    usedBytes = Number(parsed.usedBytes || 0)
+    quotaBytes = Number(parsed.quotaBytes || 0)
+    usagePercent = Number(parsed.usagePercent || 0)
+    quotaKnown = parsed.quotaKnown === true
+    files = parsed.files || []
+    inventoryUpdatedAt = Date.now()
   }
 
   // Daemon state only, no folder walk: ~100ms instead of seconds, and it runs
   // on its own process so it never queues behind a full refresh.
   function quickRefresh() {
-    if (quickStatusProcess.running || helperPath === "/shell/plugins/panels/dropbox/status.py") return
+    if (quickStatusProcess.running) return
     quickStatusProcess.generation = _generation
     quickStatusProcess.command = ["python3", helperPath, "--quick"]
     quickStatusProcess.running = true
@@ -97,26 +112,25 @@ Item {
     if (_desired === -1) {
       running = observed
     } else if (observed === (_desired === 1)) {
-      // Reality caught up to the pending pause/resume — stop overriding, and
-      // load the real file list/usage now that the daemon has settled.
+      // Reality caught up to the pending pause/resume.
       running = observed
       _desired = -1
       settleTimer.running = false
-      if (parsed.quick === true) delayedRefresh.restart()
     }
     // Otherwise the poll predates the stop/start landing (dropboxd takes ~5s
     // to exit after `dropbox-cli stop`, and `status` reports "Up to date"
     // until then), so keep the optimistic state and wait for the next poll.
     statusText = String(parsed.statusText || (installed ? "Stopped" : "Not installed"))
-    accountPath = String(parsed.accountPath || "")
-    plan = String(parsed.plan || "")
-    if (parsed.quick !== true) {
-      usedBytes = Number(parsed.usedBytes || 0)
-      quotaBytes = Number(parsed.quotaBytes || 0)
-      usagePercent = Number(parsed.usagePercent || 0)
-      quotaKnown = parsed.quotaKnown === true
-      files = parsed.files || []
+    var nextPath = String(parsed.accountPath || "")
+    if (nextPath !== accountPath) {
+      inventoryUpdatedAt = 0
+      usedBytes = 0
+      files = []
+      quotaKnown = false
     }
+    accountPath = nextPath
+    plan = String(parsed.plan || "")
+    if (detailsWanted) refreshDetails(false)
     lastError = ""
   }
 
@@ -131,16 +145,16 @@ Item {
     _loginError = ""
     _loginUrlOpened = false
     actionStatus = "Starting Dropbox login…"
-    loginProcess.command = ["dropbox-cli", "start"]
+    loginProcess.command = ["bash", "-c", "systemctl --user start omarchy-dropbox.service && dropbox-cli start"]
     loginProcess.running = true
   }
 
   function pause() {
-    runControl(["dropbox-cli", "stop"], 0)
+    runControl(["systemctl", "--user", "stop", "omarchy-dropbox.service"], 0)
   }
 
   function resume() {
-    runControl(["dropbox-cli", "start"], 1)
+    runControl(["systemctl", "--user", "start", "omarchy-dropbox.service"], 1)
   }
 
   function toggleRunning() {
@@ -154,6 +168,7 @@ Item {
     if (!installed || controlProcess.running) return
     _desired = desired
     _generation += 1
+    settleTimer.stop()
     _controlOutput = ""
     _controlError = ""
     controlProcess.command = command
@@ -192,23 +207,14 @@ Item {
   }
 
   Timer {
-    // One full scan at startup so the panel has data the first time it opens,
-    // then the cheap daemon poll unless the panel is open and looking at the
-    // file list. Opening the panel and pressing R run the full scan directly.
+    // The bar only needs daemon state. Inventory is loaded on panel use and
+    // cached independently, never on startup or during control settling.
     id: refreshTimer
-    property bool primed: false
     interval: root.refreshIntervalSec * 1000
     repeat: true
     running: true
     triggeredOnStart: true
-    onTriggered: {
-      if (root.detailsWanted || !primed) {
-        primed = true
-        root.refresh()
-      } else {
-        root.quickRefresh()
-      }
-    }
+    onTriggered: root.refresh(false)
   }
 
   Timer {
@@ -232,7 +238,7 @@ Item {
     id: delayedRefresh
     interval: 1000
     repeat: false
-    onTriggered: root.refresh()
+    onTriggered: root.quickRefresh()
   }
 
   Timer {
@@ -258,7 +264,8 @@ Item {
         settleTimer.ticks = 0
         settleTimer.running = false
         root._desired = -1
-        root.refresh()
+        root.actionStatus = "Dropbox did not reach the requested sync state"
+        root.quickRefresh()
         return
       }
       root.quickRefresh()
@@ -279,17 +286,15 @@ Item {
 
   Process {
     id: statusProcess
-    property int generation: 0
     running: false
     command: []
     stdout: StdioCollector { id: statusStdout; waitForEnd: true; onStreamFinished: root._statusOutput = text }
     stderr: StdioCollector { id: statusStderr; waitForEnd: true; onStreamFinished: root._statusError = text }
     onExited: function(exitCode) {
       root.refreshing = false
-      if (generation !== root._generation) return
       var stdout = String(statusStdout.text || root._statusOutput || "")
       var stderr = String(statusStderr.text || root._statusError || "")
-      if (exitCode === 0) root.applyStatus(stdout)
+      if (exitCode === 0) root.applyInventory(stdout)
       else root.lastError = root.elideStatus(stderr || stdout || "Could not read Dropbox status")
     }
   }

@@ -712,3 +712,6 @@ assert_output_contains "a --help behind -- belongs to the command and still forw
 
 output=$("$TMPDIR/omarchy" parenthelp --helpme x--help)
 assert_output_contains "help lookalike tokens do not trigger help" "$output" "parenthelp-parent-ran args=[--helpme x--help]"
+
+# Session exit tests mock the compositor and power actions.
+python3 "$ROOT/test/cli.d/fixtures/session-end/test.py"

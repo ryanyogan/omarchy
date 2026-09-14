@@ -19,4 +19,8 @@ for (const change of [s => s.width = 0, s => s.height = 99999, s => s.lights[0].
 }
 for (const input of [null, '1', NaN, Infinity, -1]) assert(context.level(input) === 0, 'invalid activity is idle')
 assert(context.level(20) === 1 && context.level(0.4) === 0.4, 'activity is bounded')
+assert(context.monitorCanAnimate({ dpmsStatus: true }, false), 'visible monitor animates')
+assert(!context.monitorCanAnimate({ dpmsStatus: false }, false), 'powered-off monitor does not animate')
+assert(!context.monitorCanAnimate({ solitaryBlockedBy: ['LOCK'] }, false), 'locked monitor does not animate')
+assert(!context.monitorCanAnimate({ dpmsStatus: true }, true), 'fullscreen monitor does not animate')
 JS

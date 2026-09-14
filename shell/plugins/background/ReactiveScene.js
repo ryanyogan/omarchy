@@ -21,3 +21,9 @@ function parse(raw) {
 function level(value) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0
 }
+
+function monitorCanAnimate(state, fullscreen) {
+  if (!state || state.dpmsStatus === false || fullscreen) return false
+  var blocked = state.solitaryBlockedBy || []
+  return blocked.indexOf("LOCK") === -1
+}

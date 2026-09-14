@@ -137,8 +137,14 @@ class Monitor:
 def main():
   monitor = Monitor(Path.home())
   try:
+    previous = None
+    last_emit = float("-inf")
     while True:
-      print(json.dumps(monitor.sample(time.time()), separators=(",", ":")), flush=True)
+      now = time.monotonic()
+      sample = monitor.sample(time.time())
+      if sample != previous or now - last_emit >= 10:
+        print(json.dumps(sample, separators=(",", ":")), flush=True)
+        previous, last_emit = sample, now
       time.sleep(1)
   except (BrokenPipeError, KeyboardInterrupt):
     pass

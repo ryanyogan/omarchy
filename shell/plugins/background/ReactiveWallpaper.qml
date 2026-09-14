@@ -28,7 +28,7 @@ Item {
           : Scene.level(root.levels[modelData.channel])
         opacity: strength
         visible: opacity > 0.001
-        Behavior on opacity { NumberAnimation { duration: 1800; easing.type: Easing.InOutCubic } }
+        Behavior on opacity { NumberAnimation { duration: 450; easing.type: Easing.InOutCubic } }
 
         // Fixed geometry, layered translucent strokes: only opacity animates.
         // No full-screen blur texture, particle timer, or idle render loop.

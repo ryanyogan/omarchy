@@ -40,7 +40,8 @@ Item {
       onRead: function(line) {
         try {
           var record = JSON.parse(line)
-          root.levels = ({ claude: Scene.level(record.levels.claude), codex: Scene.level(record.levels.codex) })
+          var next = { claude: Scene.level(record.levels.claude), codex: Scene.level(record.levels.codex) }
+          if (next.claude !== root.levels.claude || next.codex !== root.levels.codex) root.levels = next
           watchdog.restart()
         } catch (_) { root.levels = ({ claude: 0, codex: 0 }) }
       }
@@ -50,7 +51,7 @@ Item {
 
   Timer {
     id: watchdog
-    interval: 4000
+    interval: 15000
     onTriggered: root.levels = ({ claude: 0, codex: 0 })
   }
   Timer {
@@ -61,6 +62,7 @@ Item {
   }
   IpcHandler {
     target: "background-activity"
+    function status(): string { return JSON.stringify({ sceneLoaded: root.scene !== null, playbackEnabled: root.playbackEnabled, previewSecond: root.previewSecond, levels: root.levels }) }
     function preview(): void {
       if (root.scene && root.playbackEnabled) root.previewSecond = 0
     }

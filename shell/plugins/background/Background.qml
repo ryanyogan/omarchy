@@ -7,6 +7,7 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import qs.Commons
 import qs.Ui
+import "ReactiveScene.js" as Scene
 
 Item {
   id: root
@@ -48,10 +49,22 @@ Item {
   ReactiveActivity {
     id: reactiveActivity
     path: root.displayedBackground
-    playbackEnabled: !root.sessionObscured && !root.powerSaverActive && Quickshell.screens.some(function(screen) {
-      var monitor = Hyprland.monitorFor(screen)
-      return !monitor || !monitor.activeWorkspace || !monitor.activeWorkspace.hasFullscreen
-    })
+    playbackEnabled: !root.sessionObscured && !root.powerSaverActive
+      && Quickshell.screens.some(function(screen) { return root.monitorCanAnimate(screen) })
+  }
+
+  function monitorCanAnimate(screen) {
+    var monitor = Hyprland.monitorFor(screen)
+    return !!monitor && Scene.monitorCanAnimate(monitor.lastIpcObject,
+      !!(monitor.activeWorkspace && monitor.activeWorkspace.hasFullscreen))
+  }
+
+  Timer {
+    interval: 5000
+    repeat: true
+    triggeredOnStart: true
+    running: reactiveActivity.scene !== null
+    onTriggered: Hyprland.refreshMonitors()
   }
 
   function isVideo(path) {
@@ -288,7 +301,7 @@ Item {
         anchors.fill: parent
         scene: reactiveActivity.scene
         levels: reactiveActivity.output
-        playbackEnabled: base.playbackEnabled && !root.incomingBackground
+        playbackEnabled: base.playbackEnabled && root.monitorCanAnimate(panel.screen) && !root.incomingBackground
         previewLabel: reactiveActivity.previewLabel
       }
 

@@ -668,6 +668,8 @@ QtObject {
       "-q",
       "-e",
       "close_write,create,delete,move",
+      "--exclude",
+      "(^|/)(\\.git|node_modules|target|__pycache__|\\.cache|\\.venv|tests?)(/|$)|\\.(pyc|pyo|log|tmp|swp)$",
       "--format",
       "%w%f",
       registry.pluginsDir
@@ -733,7 +735,8 @@ QtObject {
     var relative = path.slice(base.length)
     // Hidden entries are not plugins: clone staging dirs, remove backups.
     if (relative.indexOf(".") === 0) return ""
-    if (relative.indexOf("/.git/") !== -1 || relative.endsWith("/.git")) return ""
+    if (/(^|\/)(\.git|node_modules|target|__pycache__|\.cache|\.venv|tests?)(\/|$)/.test(relative)) return ""
+    if (/\.(pyc|pyo|log|tmp|swp)$/.test(relative) || /~$/.test(relative)) return ""
 
     var slash = relative.indexOf("/")
     return slash === -1 ? relative : relative.slice(0, slash)

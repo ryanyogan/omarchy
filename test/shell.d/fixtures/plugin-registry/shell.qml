@@ -78,6 +78,11 @@ ShellRoot {
   }
 
   function runChecks() {
+    for (var ignored of [".git/index", "sampler/target/release/build/file", "node_modules/a/file", "__pycache__/status.pyc", "tests/tst.qml", "worker.log"]) {
+      root.assertEqual(registry.localPluginIdForPath(registry.pluginsDir + "/sample/" + ignored), "", "ignore generated path " + ignored)
+    }
+    root.assertEqual(registry.localPluginIdForPath(registry.pluginsDir + "/sample/Service.qml"), "sample", "reload QML source")
+    root.assertEqual(registry.localPluginIdForPath(registry.pluginsDir + "/sample/manifest.json"), "sample", "reload plugin manifest")
     var scan = ""
     scan += block("firstparty", "/first/widgets/clock", manifest("omarchy.first-widget", ["bar-widget"], { barWidget: "Widget.qml" }))
     scan += block("firstparty", "/first/bar", manifest("omarchy.bar", ["bar"], { bar: "Bar.qml" }))

@@ -60,7 +60,7 @@ ShellRoot {
 
   Timer {
     id: localPluginReloadTimer
-    interval: 150
+    interval: 750
     onTriggered: shell.reloadPlugins()
   }
 
@@ -1438,42 +1438,44 @@ ShellRoot {
     pluginWidgetComponents = ({})
   }
 
-  function reloadPlugins() {
-    if (shell.pluginReloading || shell.pluginRegistry.scanning) {
-      shell.pluginReloadPending = true
-      return
+  // QML has no Qt.clearComponentCache API. Recreating objects in this engine
+  // can silently reuse stale nested components. Use the canonical restart
+  // command, which waits for the old process and its IPC handlers to exit.
+  // Keep the live lock client intact; queue edits until the session unlocks.
+  Process {
+    id: pluginRestartCheck
+    command: ["omarchy-hyprland-session-locked"]
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        pluginRestartRetry.restart()
+      } else if (exitCode === 1) {
+        Quickshell.execDetached(["systemd-run", "--user", "--collect", "--quiet",
+          "--unit=omarchy-plugin-reload", "omarchy-restart-shell"])
+        shell.pluginReloadPending = false
+      } else {
+        console.warn("Could not check session lock; plugin reload deferred")
+        pluginRestartRetry.restart()
+      }
     }
-    shell.pluginReloading = true
-    shell.unloadPanels()
-    shell.unloadPluginServices()
-    shell.unloadPluginWidgets()
-    Qt.callLater(shell.finishPluginReload)
   }
 
-  function finishPluginReload() {
-    if (!shell.pluginReloading) return
-    if (shell.pluginRegistry.scanning) {
-      shell.pluginReloadPending = true
-      return
-    }
-    if (typeof Qt.clearComponentCache === "function") Qt.clearComponentCache()
-    shell.pluginRegistry.rescan()
+  Timer {
+    id: pluginRestartRetry
+    interval: 5000
+    onTriggered: shell.reloadPlugins()
+  }
+
+  function reloadPlugins() {
+    shell.pluginReloadPending = true
+    if (!pluginRestartCheck.running) pluginRestartCheck.running = true
   }
 
   Connections {
     target: shell.pluginRegistry
     function onLocalPluginChanged(pluginId) {
-      console.log("Local plugin changed, reloading:", pluginId)
       localPluginReloadTimer.restart()
     }
     function onScanFinished() {
-      if (shell.pluginReloadPending) {
-        shell.pluginReloadPending = false
-        shell.pluginReloading = false
-        Qt.callLater(shell.reloadPlugins)
-        return
-      }
-      shell.pluginReloading = false
       shell._syncServices()
       shell.panelEntries = shell.computePanelEntries()
       shell.syncPluginWidgets()

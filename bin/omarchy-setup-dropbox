@@ -1,0 +1,59 @@
+#!/bin/bash
+# omarchy:summary=Give Dropbox one service owner for startup and sync controls
+# omarchy:args=[--migrate]
+set -euo pipefail
+
+mode=${1:-}
+[[ -z $mode || $mode == "--migrate" ]] || { echo "Usage: omarchy setup dropbox [--migrate]" >&2; exit 1; }
+
+was_running=0
+# Dropbox's CLI returns 1 when running and 0 when stopped.
+if dropbox-cli running; then
+  was_running=0
+else
+  status=$?
+  (( status == 1 )) || exit "$status"
+  was_running=1
+fi
+
+systemctl --user daemon-reload
+if [[ $(systemctl --user show omarchy-dropbox.service -p LoadState --value) == "not-found" ]]; then
+  # Source checkouts may precede the matching omarchy-settings package.
+  install -Dm644 "$OMARCHY_PATH/default/systemd/user/omarchy-dropbox.service" \
+    "$HOME/.config/systemd/user/omarchy-dropbox.service"
+  systemctl --user daemon-reload
+fi
+
+if ! systemctl --user is-active --quiet omarchy-dropbox.service && (( was_running )); then
+  omarchy-dropbox-stop
+  systemctl --user stop dropbox.service app-dropbox@autostart.service 2>/dev/null || true
+fi
+
+autostart="$HOME/.config/autostart/dropbox.desktop"
+if [[ -f $autostart || -z $mode ]]; then
+  mkdir -p "${autostart%/*}"
+  [[ ! -f $autostart ]] || cp -an "$autostart" "$autostart.before-service"
+  python3 - "$autostart" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else '[Desktop Entry]\nType=Application\nName=Dropbox\nIcon=dropbox\nTerminal=false\n'
+command = 'Exec=systemctl --user start omarchy-dropbox.service\n'
+def update(match):
+  body = match.group(2)
+  body = re.sub(r'^Exec=.*\n?', command, body, flags=re.M) if re.search(r'^Exec=', body, re.M) else body.rstrip() + '\n' + command
+  return match.group(1) + body
+text, count = re.subn(r'(^\[Desktop Entry\]\n)(.*?)(?=^\[|\Z)', update, text, flags=re.M | re.S)
+if count != 1:
+  raise SystemExit('Dropbox autostart has no unique Desktop Entry section')
+path.write_text(text)
+PY
+  systemctl --user daemon-reload
+fi
+
+# An update preserves a paused daemon and the existing autostart preference.
+if [[ -z $mode ]] || (( was_running )); then
+  systemctl --user start omarchy-dropbox.service
+fi

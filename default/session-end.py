@@ -36,7 +36,8 @@ def prepare(action, deadline_seconds=30):
     requests.append('dispatch hl.dsp.window.close({ window = "address:' + address + '" })')
   if requests:
     result = run('hyprctl', '--batch', '; '.join(requests))
-    if result.returncode or any(line.strip() != 'ok' for line in result.stdout.splitlines()):
+    responses = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if result.returncode or responses != ['ok'] * len(requests):
       raise RuntimeError('Could not request application closure')
 
   # Watch all mapped windows, including save dialogs created after close was
